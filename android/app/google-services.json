@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "694115785084",
+    "firebase_url": "https://but-together-default-rtdb.firebaseio.com",
+    "project_id": "but-together",
+    "storage_bucket": "but-together.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:694115785084:android:ef949032f30607943eacf9",
+        "android_client_info": {
+          "package_name": "com.buytogether.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDVL0NhTf7P1_G0PyuOg5PhPQaEuVBvCKo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
