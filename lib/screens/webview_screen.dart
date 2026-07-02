@@ -21,6 +21,7 @@ import 'package:webview_master_app/utils/prefs_util.dart';
 import 'package:webview_master_app/utils/status_bar_util.dart';
 import 'package:webview_master_app/widgets/exit_dialog.dart';
 import 'package:webview_master_app/widgets/offline_screen.dart';
+import 'package:webview_master_app/screens/splash_screen.dart';
 
 /// WebView Screen - Main screen that loads the configured web URL
 class WebViewScreen extends StatefulWidget {
@@ -40,6 +41,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
   bool _phoneListenerInjected = false;
   bool _linkInterceptorInjected = false;
   bool _locationButtonClickDetected = false;
+  bool _isInitialLoad = true;
+  bool _splashMinDurationElapsed = false;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
 
   // Track pending download requests from API calls
@@ -65,9 +68,25 @@ class _WebViewScreenState extends State<WebViewScreen> {
       },
     );
 
-    _checkConnectivity();
+   // _checkConnectivity();
     _initializeNotifications();
-    _listenToConnectivityChanges();
+   // _listenToConnectivityChanges();
+    _initializePermissionsAndSplash();
+  }
+
+  Future<void> _initializePermissionsAndSplash() async {
+    try {
+      await PermissionHandlerUtil.requestAllPermissions();
+    } catch (e) {
+      debugPrint('Init Error Log: $e');
+    }
+    
+    await Future.delayed(Duration(seconds: AppConfig.splashDurationSeconds));
+    if (mounted) {
+      setState(() {
+        _splashMinDurationElapsed = true;
+      });
+    }
   }
 
   @override
@@ -930,6 +949,14 @@ class _WebViewScreenState extends State<WebViewScreen> {
   }
 
   /// Check initial connectivity status
+  // Future<void> _checkConnectivity() async {
+  //   final isConnected = await ConnectivityUtil.isConnected();
+  //   if (mounted) {
+  //     setState(() {
+  //       _isOnline = isConnected;
+  //     });
+  //   }
+  // }
   Future<void> _checkConnectivity() async {
     final isConnected = await ConnectivityUtil.isConnected();
     if (mounted) {
@@ -1313,6 +1340,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
       onWillPop: _onWillPop,
       child: Scaffold(
         body: SafeArea(
+          // bottom: false,
+          // top: false,
           child: _isOnline
               ? Stack(
                   children: [
@@ -1344,6 +1373,14 @@ class _WebViewScreenState extends State<WebViewScreen> {
                         useOnLoadResource: true,
                         useShouldOverrideUrlLoading: true,
                       ),
+                      onReceivedError: (controller, request, error){
+                        debugPrint(request.toString());
+                        if(request.isForMainFrame == true || request.url.toString().endsWith('.js')){
+                          setState(() {
+                          _isOnline = false;
+                        });
+                        }
+                      },
                       onCreateWindow: (controller, createWindowRequest) async {
                         final urlRequest = createWindowRequest.request;
                         var url = urlRequest.url;
@@ -1615,9 +1652,27 @@ class _WebViewScreenState extends State<WebViewScreen> {
                         controller.addJavaScriptHandler(
                           handlerName: 'openCamera',
                           callback: (args) async {
-                            // Open camera using image_picker
-                            final ImagePicker picker = ImagePicker();
                             try {
+                              // Because CAMERA is declared in AndroidManifest.xml, image_picker
+                              // requires it to be granted at runtime before pickImage(camera)
+                              // will return a photo — and it does NOT request it for us.
+                              var status = await Permission.camera.status;
+                              if (!status.isGranted) {
+                                status = await Permission.camera.request();
+                              }
+                              if (!status.isGranted) {
+                                debugPrint('⚠️ Camera permission not granted');
+                                if (status.isPermanentlyDenied) {
+                                  await openAppSettings();
+                                }
+                                return {
+                                  'success': false,
+                                  'error': 'CAMERA_PERMISSION_DENIED',
+                                };
+                              }
+
+                              // Open camera using image_picker
+                              final ImagePicker picker = ImagePicker();
                               final XFile? image = await picker.pickImage(
                                 source: ImageSource.camera,
                                 imageQuality: 80,
@@ -1636,11 +1691,13 @@ class _WebViewScreenState extends State<WebViewScreen> {
                                   'fileName': image.name,
                                 };
                               }
+
+                              // image == null → user cancelled the camera.
+                              return {'success': false, 'cancelled': true};
                             } catch (e) {
                               debugPrint('❌ Error in openCamera handler: $e');
+                              return {'success': false, 'error': e.toString()};
                             }
-
-                            return {'success': false};
                           },
                         );
 
@@ -1697,6 +1754,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
                       onLoadStop: (controller, url) async {
                         setState(() {
                           _isLoading = false;
+                          _isInitialLoad = false;
                           _pullToRefreshController.endRefreshing();
                           _loadingProgress = 1.0;
                         });
@@ -1718,6 +1776,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
                           _loadingProgress = progress / 100;
                           if (progress >= 100) {
                             _isLoading = false;
+                            _isInitialLoad = false;
                           }
                         });
                         debugPrint('📊 Loading progress: $progress%');
@@ -1726,6 +1785,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
                         _pullToRefreshController.endRefreshing();
                         setState(() {
                           _isLoading = false;
+                          _isInitialLoad = false;
                         });
                         debugPrint('❌ Load error: $message (code: $code)');
                       },
@@ -2048,7 +2108,9 @@ class _WebViewScreenState extends State<WebViewScreen> {
                       },
                     ),
                     // Loading indicator overlay - only show when loading
-                    if (_isLoading)
+                    if (_isInitialLoad || !_splashMinDurationElapsed)
+                      const SplashScreen()
+                    else if (_isLoading)
                       Container(
                         color: Colors.white.withOpacity(0.9),
                         child: Center(
