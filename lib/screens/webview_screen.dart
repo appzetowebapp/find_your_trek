@@ -1,16 +1,19 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:smart_auth/smart_auth.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_master_app/config/app_config.dart';
 import 'package:webview_master_app/utils/connectivity_util.dart';
@@ -45,12 +48,20 @@ class _WebViewScreenState extends State<WebViewScreen> {
   bool _splashMinDurationElapsed = false;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
 
+  // ── Dynamic status bar ────────────────────────────────────────────────────
+  // Starts with brand teal; updated automatically by JS colour detection on
+  // every page load so the bar always matches the website's top section.
+  Color _statusBarColor = const Color(0xFF087B84);
+  Brightness _statusBarIconBrightness = Brightness.light; // light on teal
+  // ─────────────────────────────────────────────────────────────────────────
+
   // Track pending download requests from API calls
   final Map<String, Map<String, dynamic>> _pendingDownloadRequests = {};
 
   // Track API request bodies captured from JavaScript
   final Map<String, String> _apiRequestBodies = {};
   late final PullToRefreshController _pullToRefreshController;
+  final SmartAuth _smartAuth = SmartAuth.instance;
   @override
   void initState() {
     super.initState();
@@ -58,16 +69,13 @@ class _WebViewScreenState extends State<WebViewScreen> {
       settings: PullToRefreshSettings(color: AppConfig.primaryColor),
       onRefresh: () async {
         if (_webViewController != null) {
-          // await _webViewController!.loadUrl(
-          //   urlRequest: URLRequest(url: WebUri(AppConfig.webUrl)),
-          // );
-
-          // Reload the current page instead of going back to home
+          _forceApplyStatusBarStyle();
           await _webViewController!.reload();
         }
       },
     );
 
+    _forceApplyStatusBarStyle();
    // _checkConnectivity();
     _initializeNotifications();
    // _listenToConnectivityChanges();
@@ -92,7 +100,40 @@ class _WebViewScreenState extends State<WebViewScreen> {
   @override
   void dispose() {
     _connectivitySubscription?.cancel();
+    _stopOTPListener();
     super.dispose();
+  }
+
+  bool _otpListenerActive = false;
+
+  Future<void> _startOTPListener() async {
+    if (!Platform.isAndroid || _otpListenerActive) return;
+    _otpListenerActive = true;
+    
+    try {
+      debugPrint('📱 Starting SMS Listener for OTP...');
+      final res = await _smartAuth.getSmsWithUserConsentApi();
+      if (res.hasData && res.data != null) {
+        final code = res.data!.code;
+        debugPrint('✅ OTP Extracted natively: $code');
+        if (_webViewController != null && code != null) {
+          await _webViewController!.evaluateJavascript(
+            source: "window.__autofillOTP('$code');"
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('❌ OTP Listener error: $e');
+    } finally {
+      _otpListenerActive = false;
+    }
+  }
+
+  void _stopOTPListener() {
+    if (!Platform.isAndroid) return;
+    _smartAuth.removeUserConsentApiListener();
+    _otpListenerActive = false;
+    debugPrint('🛑 SMS Listener stopped');
   }
 
   Future<bool> _onWillPop() async {
@@ -711,10 +752,10 @@ class _WebViewScreenState extends State<WebViewScreen> {
             var self = this;
             var url = this._url;
             
-            if (url && (url.includes('/auth/login') || 
-                        url.includes('/users/login') ||
-                        url.includes('/auth/signup-verify') ||
-                        url.includes('/auth/verify-otp'))) {
+            if (url && (url.includes('login') || 
+                        url.includes('register') ||
+                        url.includes('signup') ||
+                        url.includes('otp'))) {
                this.addEventListener('load', function() {
                   try {
                     var responseBody = self.responseText;
@@ -754,6 +795,12 @@ class _WebViewScreenState extends State<WebViewScreen> {
         handlerName: 'captureLoginResponse',
         callback: (args) async {
           if (args.isEmpty) return;
+
+          // ── OTP TRIGGER ─────────────────────────────────────────────────────
+          // If a login/signup API response is captured, an OTP is likely on its
+          // way. Start the native SMS listener immediately so it's ready.
+          _startOTPListener();
+          // ───────────────────────────────────────────────────────────────────
 
           try {
             debugPrint('📦 RAW RESPONSE: ${args[0]}');
@@ -1332,23 +1379,454 @@ class _WebViewScreenState extends State<WebViewScreen> {
     }
   }
 
+  // ─── Dynamic Status Bar Color Helpers ──────────────────────────────────────
+
+  /// Parse a CSS colour string (rgb / rgba / hex) returned by JavaScript
+  /// into a Flutter [Color].  Returns null if parsing fails.
+  Color? _parseCssColor(String css) {
+    try {
+      final s = css.trim().toLowerCase();
+
+      // rgb(r, g, b)  or  rgba(r, g, b, a)
+      final rgbMatch =
+          RegExp(r'rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)').firstMatch(s);
+      if (rgbMatch != null) {
+        final r = int.parse(rgbMatch.group(1)!);
+        final g = int.parse(rgbMatch.group(2)!);
+        final b = int.parse(rgbMatch.group(3)!);
+        // Treat fully transparent (r=g=b=0 comes from rgba(0,0,0,0)) as null
+        if (s.contains('rgba') && s.contains(', 0)')) return null;
+        return Color.fromARGB(255, r, g, b);
+      }
+
+      // #rrggbb  or  #rgb
+      if (s.startsWith('#')) {
+        var hex = s.substring(1);
+        if (hex.length == 3) {
+          hex = hex.split('').map((c) => '$c$c').join();
+        }
+        if (hex.length == 6) {
+          return Color(int.parse('FF$hex', radix: 16));
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// Compute relative luminance of [color] (per WCAG 2.x).
+  /// Returns a value in [0, 1]; > 0.35 is considered "light".
+  double _relativeLuminance(Color color) {
+    double linearize(int c) {
+      final s = c / 255.0;
+      return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) * ((s + 0.055) / 1.055);
+    }
+    return 0.2126 * linearize(color.red) +
+        0.7152 * linearize(color.green) +
+        0.0722 * linearize(color.blue);
+  }
+
+  void _forceApplyStatusBarStyle() {
+    // On Android 10-14, edgeToEdge is disabled. We explicitly color the OS status bar teal
+    // and the navigation bar white to seamlessly blend with the app.
+    final Color nativeStatusBarColor = (Platform.isAndroid && AppConfig.androidSdkInt < 35)
+        ? _statusBarColor
+        : Colors.transparent;
+    final Color nativeNavBarColor = (Platform.isAndroid && AppConfig.androidSdkInt < 35)
+        ? Colors.white
+        : Colors.transparent;
+
+    SystemChrome.setSystemUIOverlayStyle(
+      SystemUiOverlayStyle(
+        statusBarColor: nativeStatusBarColor, 
+        systemNavigationBarColor: nativeNavBarColor,
+        statusBarIconBrightness: _statusBarIconBrightness,
+        statusBarBrightness: _statusBarIconBrightness == Brightness.light
+            ? Brightness.dark
+            : Brightness.light,
+        systemNavigationBarIconBrightness: Brightness.dark,
+      ),
+    );
+  }
+
+  /// Parse [cssColor], decide icon brightness, then update state and system UI.
+  void _applyStatusBarColor(String cssColor) {
+    final parsed = _parseCssColor(cssColor);
+    if (parsed == null) return; // transparent / unparsable → keep current
+
+    final lum = _relativeLuminance(parsed);
+    // Light background → dark icons; Dark background → light icons.
+    final icons = lum > 0.35 ? Brightness.dark : Brightness.light;
+
+    if (!mounted) return;
+    setState(() {
+      _statusBarColor = parsed;
+      _statusBarIconBrightness = icons;
+    });
+
+    // The Container widget (sized to viewPadding.top) now handles the visual
+    // colour. Set statusBarColor to transparent so it doesn't fight with the
+    // Container on Android and keeps iOS behaviour correct.
+    _forceApplyStatusBarStyle();
+
+    // On Android 15+ (API 35+), additionally update icon appearance via the
+    // native channel so WindowInsetsControllerCompat is called directly —
+    // this covers cases where the deprecated SystemChrome path is ignored.
+    if (Platform.isAndroid) {
+      const _channel = MethodChannel('com.buytogether.app/statusbar');
+      _channel.invokeMethod('setIconBrightness', {
+        'isLight': icons == Brightness.dark, // isLight=true means dark icons
+      }).catchError((_) {/* channel not yet set up or called too early */});
+    }
+
+    debugPrint('🎨 Status bar → $cssColor | lum=${lum.toStringAsFixed(2)} | '
+        'icons=${icons == Brightness.light ? "light" : "dark"}');
+  }
+
+  /// Inject JS that detects the website's top header background colour and
+  /// posts it back to Flutter via the [updateStatusBarColor] handler.
+  Future<void> _injectStatusBarColorDetector(
+      InAppWebViewController controller) async {
+    const script = r'''
+      (function() {
+        if (window.__statusBarDetectorInstalled) return;
+        window.__statusBarDetectorInstalled = true;
+
+        function getEffectiveBg(el) {
+          while (el && el !== document.documentElement) {
+            var st = window.getComputedStyle(el);
+            
+            // 1. Check if there's a background gradient (often used in headers)
+            var bgImg = st.backgroundImage;
+            if (bgImg && bgImg.includes('gradient')) {
+              // Extract the first rgb/rgba or hex color from the gradient string
+              var match = bgImg.match(/(rgb\([^)]+\)|rgba\([^)]+\)|#[a-fA-F0-9]{3,8})/);
+              if (match) {
+                return match[1];
+              }
+            }
+            
+            // 2. Fallback to normal background color
+            var bg = st.backgroundColor;
+            if (bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)') {
+              return bg;
+            }
+            el = el.parentElement;
+          }
+          return null;
+        }
+
+        function detectTopColor() {
+          // Use elementsFromPoint to perfectly identify what is visibly painted
+          // at the top center of the screen, just beneath the status bar. This
+          // bypasses any issues with deeply nested transparent wrappers holding
+          // a coloured child div.
+          var x = window.innerWidth / 2;
+          var y = 5; // 5 pixels down to ensure we hit the page body, not edges
+          
+          var els = document.elementsFromPoint(x, y);
+          if (els && els.length > 0) {
+            for (var i = 0; i < els.length; i++) {
+              var el = els[i];
+              var st = window.getComputedStyle(el);
+              
+              // 1. Check for gradients
+              var bgImg = st.backgroundImage;
+              if (bgImg && bgImg.includes('gradient')) {
+                var match = bgImg.match(/(rgb\([^)]+\)|rgba\([^)]+\)|#[a-fA-F0-9]{3,8})/);
+                if (match) return match[1];
+              }
+              
+              // 2. Check for solid colours
+              var bg = st.backgroundColor;
+              if (bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)') {
+                // If it's highly transparent (e.g. 0.1 alpha overlay), skip it
+                // and keep looking underneath so we get the true visual colour.
+                if (bg.startsWith('rgba')) {
+                   var parts = bg.split(',');
+                   if (parts.length === 4) {
+                     var alpha = parseFloat(parts[3]);
+                     if (alpha < 0.5) continue;
+                   }
+                }
+                return bg;
+              }
+            }
+          }
+
+          // Fallback to html/body if nothing solid is found
+          return window.getComputedStyle(document.body).backgroundColor || 'rgb(255,255,255)';
+        }
+
+        var lastColor = null;
+        function report() {
+          var color = detectTopColor();
+          
+          if (color !== lastColor) {
+            // Only accept colour updates if we are at the top of the page,
+            // or if the element we hit is a fixed/sticky header. This prevents
+            // the status bar from wildly changing colours as the user scrolls
+            // down into normal page content.
+            var isFixed = false;
+            var els = document.elementsFromPoint(window.innerWidth / 2, 5);
+            if (els.length > 0) {
+              var pos = window.getComputedStyle(els[0]).position;
+              if (pos === 'fixed' || pos === 'sticky') isFixed = true;
+            }
+            
+            if (window.scrollY <= 10 || isFixed) {
+              lastColor = color;
+              if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                window.flutter_inappwebview.callHandler('updateStatusBarColor', color);
+              }
+            }
+          }
+        }
+
+        // Run immediately, then continuously poll every 250ms.
+        // This is extremely cheap (single raycast) and guarantees that lazy-loaded
+        // React/Vue headers or SPA navigations are caught instantly.
+        report();
+        setInterval(report, 250);
+      })();
+    ''';
+
+    try {
+      await controller.evaluateJavascript(source: script);
+    } catch (e) {
+      debugPrint('⚠️ Status bar detector inject failed: $e');
+    }
+  }
+
+  Future<void> _injectOTPAutofillScript(InAppWebViewController controller) async {
+    const script = '''
+      (function() {
+        if (window.__otpInjectorReady) return;
+        window.__otpInjectorReady = true;
+
+        let listenerStarted = false;
+
+        function tagOTPInputs() {
+          const inputs = document.querySelectorAll('input[type="number"], input[type="text"], input[type="tel"]');
+          let foundOtpInput = false;
+          
+          inputs.forEach(input => {
+            const name = (input.name || '').toLowerCase();
+            const id = (input.id || '').toLowerCase();
+            const placeholder = (input.placeholder || '').toLowerCase();
+            const type = (input.type || '').toLowerCase();
+            const cls = (input.className || '').toLowerCase();
+            const isOtp = name.includes('otp') || id.includes('otp') || placeholder.includes('otp') || cls.includes('otp') ||
+                (input.maxLength && input.maxLength <= 6 && (name.includes('code') || id.includes('code') || placeholder.includes('code') || cls.includes('code'))) ||
+                (type === 'number' && input.maxLength === 1) || // Common React 6-box input
+                (type === 'tel' && input.maxLength === 1);
+            
+            if (isOtp) {
+              
+              foundOtpInput = true;
+              
+              if (!input.hasAttribute('autocomplete')) {
+                input.setAttribute('autocomplete', 'one-time-code');
+              }
+            }
+          });
+          
+          // Start Android listener if we found an OTP input and haven't started it yet
+          if (foundOtpInput && !listenerStarted) {
+            listenerStarted = true;
+            if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+              window.flutter_inappwebview.callHandler('startOTPListener');
+            }
+          }
+        }
+        
+        // Run immediately and whenever DOM changes (for SPAs/React)
+        tagOTPInputs();
+        const observer = new MutationObserver(() => {
+           tagOTPInputs();
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+
+        // Provide bridge function for Flutter to call
+        window.__autofillOTP = function(otp) {
+          if (!otp) return false;
+          
+          const inputs = document.querySelectorAll('input[type="number"], input[type="text"], input[type="tel"]');
+          const otpInputs = Array.from(inputs).filter(i => {
+            const n = (i.name || '').toLowerCase();
+            const id = (i.id || '').toLowerCase();
+            const p = (i.placeholder || '').toLowerCase();
+            const c = (i.className || '').toLowerCase();
+            const type = (i.type || '').toLowerCase();
+            return n.includes('otp') || id.includes('otp') || p.includes('otp') || c.includes('otp') ||
+                   n.includes('code') || id.includes('code') || p.includes('code') || c.includes('code') ||
+                   i.getAttribute('autocomplete') === 'one-time-code' ||
+                   ((type === 'number' || type === 'tel') && i.maxLength === 1);
+          });
+          
+          if (otpInputs.length === 0) return false;
+          
+          // Helper to fire events and bypass strict Virtual DOM state (React/Vue)
+          function setNativeValue(element, value, key) {
+             element.focus();
+             element.value = '';
+             
+             try {
+                // 1. Try execCommand (most reliable, generates isTrusted=true native events)
+                document.execCommand('insertText', false, value);
+             } catch(e) {}
+             
+             // 2. React 15/16/17 value setter bypass
+             const valueSetter = Object.getOwnPropertyDescriptor(element, 'value');
+             const prototype = Object.getPrototypeOf(element);
+             const prototypeValueSetter = Object.getOwnPropertyDescriptor(prototype, 'value');
+
+             if (valueSetter && prototypeValueSetter && valueSetter.set && valueSetter.set !== prototypeValueSetter.set) {
+                 prototypeValueSetter.set.call(element, value);
+             } else if (valueSetter && valueSetter.set) {
+                 valueSetter.set.call(element, value);
+             } else {
+                 element.value = value;
+             }
+             
+             // 3. Reset React's internal valueTracker so it doesn't suppress the event
+             if (element._valueTracker) {
+                 element._valueTracker.setValue('');
+             }
+             
+             // 4. Broadcast all possible events
+             if (key) {
+               element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: key }));
+               element.dispatchEvent(new KeyboardEvent('keypress', { bubbles: true, key: key }));
+             }
+             element.dispatchEvent(new Event('input', { bubbles: true }));
+             element.dispatchEvent(new Event('change', { bubbles: true }));
+             if (key) {
+               element.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: key }));
+             }
+             
+             element.blur();
+          }
+          
+          let filled = false;
+          
+          // Case 1: Single input field
+          if (otpInputs.length === 1 && (!otpInputs[0].maxLength || otpInputs[0].maxLength >= otp.length)) {
+            setNativeValue(otpInputs[0], otp, otp[otp.length-1]);
+            filled = true;
+          }
+          // Case 2: Split input fields
+          else {
+            const emptyBoxes = otpInputs.filter(i => (i.maxLength === 1 || i.maxLength === -1 || i.maxLength === '') && (!i.value || i.value === ''));
+            if (emptyBoxes.length >= otp.length) {
+              for (let i = 0; i < otp.length; i++) {
+                setNativeValue(emptyBoxes[i], otp[i], otp[i]);
+              }
+              filled = true;
+            } else if (otpInputs.length >= otp.length) {
+              // Even if not empty, overwrite
+              for (let i = 0; i < otp.length; i++) {
+                setNativeValue(otpInputs[i], otp[i], otp[i]);
+              }
+              filled = true;
+            }
+          }
+          
+          // Auto submit if it's 4 or 6 digits
+          if (filled && (otp.length === 4 || otp.length === 6)) {
+             setTimeout(() => {
+               // Try to find verify button
+               const btns = Array.from(document.querySelectorAll('button'));
+               const verifyBtn = btns.find(b => b.textContent.toLowerCase().includes('verify') || b.textContent.toLowerCase().includes('submit') || b.textContent.toLowerCase().includes('continue') || b.textContent.toLowerCase().includes('confirm'));
+               if (verifyBtn && !verifyBtn.disabled) {
+                 verifyBtn.click();
+               }
+             }, 300);
+          }
+          
+          return filled;
+        };
+      })();
+    ''';
+    try {
+      await controller.evaluateJavascript(source: script);
+    } catch (e) {
+      debugPrint('⚠️ OTP autofill script inject failed: $e');
+    }
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
-    StatusBarUtil.updateStatusBar(context);
-
-    return WillPopScope(
-      onWillPop: _onWillPop,
-      child: Scaffold(
-        body: SafeArea(
-          // bottom: false,
-          // top: false,
-          child: _isOnline
-              ? Stack(
-                  children: [
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+value: SystemUiOverlayStyle(
+        // Transparent because the Container widget below physically fills the
+        // status bar area with _statusBarColor — this bypasses the deprecated
+        // Android window.statusBarColor API that is ignored on API 35+.
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: _statusBarIconBrightness,
+        // iOS: statusBarBrightness is the inverse of icon brightness.
+        statusBarBrightness: _statusBarIconBrightness == Brightness.light
+            ? Brightness.dark
+            : Brightness.light,
+      ),
+      child: WillPopScope(
+        onWillPop: _onWillPop,
+        child: Scaffold(
+          body: Stack(
+            children: [
+              Column(
+                children: [
+              // ── Status bar fill ───────────────────────────────────────────
+              // On Android 15+, this paints the transparent OS status bar teal.
+              // On Android 10-14, the OS explicitly paints the native status bar teal,
+              // so this Container becomes a 0-height non-existent spacer because the 
+              // shrunk app window starts perfectly below the native status bar.
+              Container(
+                height: (Platform.isAndroid && AppConfig.androidSdkInt < 35) ? 0.0 : MediaQuery.of(context).viewPadding.top,
+                color: _statusBarColor,
+              ),
+              // ── Page content (starts below status bar) ────────────────────
+              Expanded(
+                child: _isOnline
+                ? Stack(
+                    children: [
                     InAppWebView(
                       initialUrlRequest: URLRequest(
                         url: WebUri(AppConfig.webUrl),
                       ),
+                      initialUserScripts: UnmodifiableListView<UserScript>([
+                        UserScript(
+                          source: """
+                            // 1. Polyfill navigator.share to use Flutter native share
+                            if (typeof navigator.share === 'undefined' || !navigator.share) {
+                              navigator.share = async function(data) {
+                                if (window.flutter_inappwebview) {
+                                  await window.flutter_inappwebview.callHandler('nativeShare', data);
+                                  return;
+                                }
+                                throw new Error('Share not supported');
+                              };
+                            }
+
+                            // 2. Intercept clipboard copy as a fallback if the web app doesn't use navigator.share
+                            if (navigator.clipboard) {
+                              const originalWriteText = navigator.clipboard.writeText;
+                              navigator.clipboard.writeText = async function(text) {
+                                if (text && typeof text === 'string' && window.flutter_inappwebview) {
+                                  // Trigger native share if it looks like a group link
+                                  if (text.includes('buytogetherindia.com')) {
+                                    window.flutter_inappwebview.callHandler('nativeShare', { url: text });
+                                  }
+                                }
+                                // Always proceed with actual clipboard copy as a fallback
+                                return originalWriteText.apply(navigator.clipboard, arguments);
+                              };
+                            }
+                          """,
+                          injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+                        )
+                      ]),
                       pullToRefreshController: _pullToRefreshController,
                       initialSettings: InAppWebViewSettings(
                         userAgent:
@@ -1372,6 +1850,8 @@ class _WebViewScreenState extends State<WebViewScreen> {
                         allowUniversalAccessFromFileURLs: true,
                         useOnLoadResource: true,
                         useShouldOverrideUrlLoading: true,
+                        verticalScrollBarEnabled: false,
+                        horizontalScrollBarEnabled: false,
                       ),
                       onReceivedError: (controller, request, error){
                         debugPrint(request.toString());
@@ -1503,9 +1983,43 @@ class _WebViewScreenState extends State<WebViewScreen> {
                         return NavigationActionPolicy.ALLOW;
                       },
                       onWebViewCreated: (controller) async {
+                        _forceApplyStatusBarStyle();
                         _webViewController = controller;
 
                         debugPrint('✅ WebView created');
+
+                        // ── Dynamic Status Bar colour bridge ──────────────
+                        // The JS detector script (injected in onLoadStop)
+                        // calls this handler with the page's top-section colour.
+                        controller.addJavaScriptHandler(
+                          handlerName: 'startOTPListener',
+                          callback: (args) {
+                            _startOTPListener();
+                          },
+                        );
+
+                        controller.addJavaScriptHandler(
+                          handlerName: 'updateStatusBarColor',
+                          callback: (args) {
+                            if (args.isNotEmpty) {
+                              final colorStr = args[0].toString();
+                              
+                              // Prevent white flashes: If the page is currently loading,
+                              // the DOM might briefly be empty/white. We ignore white 
+                              // updates during this phase so the status bar retains 
+                              // the app theme consistently.
+                              if (_isLoading) {
+                                final s = colorStr.replaceAll(' ', '').toLowerCase();
+                                if (s == 'rgb(255,255,255)' || s == '#ffffff') {
+                                  return;
+                                }
+                              }
+                              
+                              _applyStatusBarColor(colorStr);
+                            }
+                          },
+                        );
+                        // ─────────────────────────────────────────────────
 
                         // Native Location Button Click Bridge
                         controller.addJavaScriptHandler(
@@ -1744,6 +2258,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
                         );
                       },
                       onLoadStart: (controller, url) {
+                        _forceApplyStatusBarStyle();
                         setState(() {
                           _isLoading = true;
                           _phoneListenerInjected = false;
@@ -1752,6 +2267,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
                         debugPrint('🌐 Loading started: $url');
                       },
                       onLoadStop: (controller, url) async {
+                        _forceApplyStatusBarStyle();
                         setState(() {
                           _isLoading = false;
                           _isInitialLoad = false;
@@ -1762,6 +2278,9 @@ class _WebViewScreenState extends State<WebViewScreen> {
                         await _injectPhoneCaptureScript(controller);
                         await _injectLinkInterceptorScript(controller);
                         await _injectApiInterceptorScript(controller);
+                        await _injectOTPAutofillScript(controller);
+                        // Detect the page's top-section colour and adapt the status bar.
+                        await _injectStatusBarColorDetector(controller);
 
                         // Fire ready event for website to detect bridge
                         await controller.evaluateJavascript(
@@ -1770,8 +2289,14 @@ class _WebViewScreenState extends State<WebViewScreen> {
                             window.dispatchEvent(new Event('flutterInAppWebViewPlatformReady'));
                           ''',
                         );
+                        
+                        // Restart OTP listener state on navigation
+                        await controller.evaluateJavascript(source: 'if (window.__otpInjectorReady) { window.__otpInjectorReady = false; }');
                       },
                       onProgressChanged: (controller, progress) {
+                        if (progress == 100) {
+                          _forceApplyStatusBarStyle();
+                        }
                         setState(() {
                           _loadingProgress = progress / 100;
                           if (progress >= 100) {
@@ -2108,9 +2633,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
                       },
                     ),
                     // Loading indicator overlay - only show when loading
-                    if (_isInitialLoad || !_splashMinDurationElapsed)
-                      const SplashScreen()
-                    else if (_isLoading)
+                    if (_isLoading && !(_isInitialLoad || !_splashMinDurationElapsed))
                       Container(
                         color: Colors.white.withOpacity(0.9),
                         child: Center(
@@ -2141,10 +2664,20 @@ class _WebViewScreenState extends State<WebViewScreen> {
                   ],
                 )
               : OfflineScreen(
-                  onRetry: _retryLoad), // Use your existing OfflineScreen
-        ),
-      ),
-    );
+                  onRetry: _retryLoad),
+              ), // closes Expanded
+            ],  // closes Column children list
+          ),    // closes Column
+          // ── Splash Screen (Full Screen Overlay) ───────────
+          if (_isInitialLoad || !_splashMinDurationElapsed)
+            const Positioned.fill(
+              child: SplashScreen(),
+            ),
+        ], // closes Stack children
+      ),   // closes Stack (Scaffold body)
+    ),     // closes Scaffold
+      ),        // closes WillPopScope
+    );          // closes AnnotatedRegion return
   }
 
   Widget _buildSourceOption({

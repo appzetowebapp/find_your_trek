@@ -20,6 +20,8 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   @override
   void initState() {
     super.initState();
+    // Hide status bar during splash screen (keeps bottom nav bar if present)
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: [SystemUiOverlay.bottom]);
     _setupSuperSmoothAnimations();
   }
 
@@ -63,21 +65,17 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   @override
   void dispose() {
     _animationController.dispose();
+    // Restore status bar and permanently lock into edge-to-edge mode ONLY on Android 15+.
+    // On Android 10-14, we use manual mode so the OS natively renders the teal status bar.
+    if (AppConfig.androidSdkInt >= 35) {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    } else {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: SystemUiOverlay.values);
+    }
     super.dispose();
   }
 
-  @override
   Widget build(BuildContext context) {
-    SystemChrome.setSystemUIOverlayStyle(
-      const SystemUiOverlayStyle(
-        statusBarColor: Colors.transparent,
-        statusBarIconBrightness: Brightness.dark,
-        statusBarBrightness: Brightness.light,
-        systemNavigationBarColor: Color(0xFF087B84), 
-        systemNavigationBarIconBrightness: Brightness.light,
-      ),
-    );
-
     return Scaffold(
       backgroundColor: Colors.white, 
       body: Stack(

@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -44,15 +45,25 @@ void main() async {
     debugPrint('❌ Error initializing notification service in main: $e');
   }
 
-  // Initial system UI overlay style (will be updated based on theme in each screen)
-  SystemChrome.setSystemUIOverlayStyle(
-    const SystemUiOverlayStyle(
-      statusBarColor: AppConfig.statusBarColorLight,
-      statusBarIconBrightness: AppConfig.statusBarIconBrightnessLight,
-      systemNavigationBarColor: AppConfig.navigationBarColorLight,
-      systemNavigationBarIconBrightness:
-          AppConfig.navigationBarIconBrightnessLight,
-    ),
+  // Detect native Android version to enable accurate version-specific
+  // edge-to-edge and WindowInsets rendering.
+  if (Platform.isAndroid) {
+    try {
+      const platform = MethodChannel('app.channel.shared.data');
+      final int sdkInt = await platform.invokeMethod('getSdkInt');
+      AppConfig.androidSdkInt = sdkInt;
+      debugPrint('📱 Detected Android SDK: $sdkInt');
+    } catch (e) {
+      debugPrint('⚠️ Failed to get Android SDK version: $e');
+    }
+  }
+
+  // Hide the status bar completely during app launch so the splash screen 
+  // can be truly full screen without any flickering. The status bar will be
+  // restored dynamically when the webview is ready.
+  SystemChrome.setEnabledSystemUIMode(
+    SystemUiMode.manual, 
+    overlays: [SystemUiOverlay.bottom],
   );
 
   runApp(const MyApp());
