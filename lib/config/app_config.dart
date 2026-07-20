@@ -13,12 +13,12 @@ import 'package:flutter/material.dart';
 /// All settings are documented inline for easy customization.
 class AppConfig {
   // ==================== APP IDENTITY ====================
-  static const String appName = 'BuyTogether';
+  static const String appName = 'Find Your Trek';
   static const String appLogoPath = 'assets/images/logo.png';
 
   // ==================== COLORS & THEME ====================
   // App's teal/green brand color matching the website header
-  static const Color primaryColor = Color(0xFF087B84); // Teal
+  static const Color primaryColor = Color(0xFF8E4692); // Teal
   static const Color secondaryColor = Color(0xFF0A9DAA); // Teal Light
   static const Color accentColor = Color(0xFF05606A); // Teal Dark
 
@@ -33,8 +33,9 @@ class AppConfig {
   static const Color exitDialogBackgroundDark = Color(0xFF1E1E1E); // Dark Gray
   static const Color exitDialogTitleColorDark = Color(0xFFFFFFFF); // White
   static const Color exitDialogTextColorDark = Color(0xFFB3B3B3); // Light Gray
-  static const Color exitDialogCancelColorDark =
-      Color(0xFFB3B3B3); // Light Gray
+  static const Color exitDialogCancelColorDark = Color(
+    0xFFB3B3B3,
+  ); // Light Gray
 
   // Exit Dialog - Common
   static const Color exitDialogButtonColor = primaryColor; // Exit button color
@@ -43,8 +44,9 @@ class AppConfig {
 
   // ==================== STATUS BAR COLORS ====================
   // App Theme Status Bar - matches the teal website header
-  static const Color statusBarColorLight =
-      Color(0xFF087B84); // Teal - matches app header
+  static const Color statusBarColorLight = Color(
+    0xFF087B84,
+  ); // Teal - matches app header
   static const Brightness statusBarIconBrightnessLight =
       Brightness.light; // Light icons on teal background
   static const Color navigationBarColorLight = Color(0xFFFFFFFF); // White
@@ -63,7 +65,7 @@ class AppConfig {
 
   // ==================== WEB URL CONFIGURATION ====================
   // ⚠️ CHANGE THIS URL TO YOUR WEB APPLICATION ⚠️
-  static const String webUrl = 'https://www.buytogetherindia.com';
+  static const String webUrl = 'https://findyourtrek.com/app/login';
 
   static const String notificationIcon =
       '@mipmap/ic_launcher'; // Default app launcher icon
@@ -88,10 +90,10 @@ class AppConfig {
 
   // Native Android version cached at startup
   static int androidSdkInt = 35; // Default to edge-to-edge (Android 15+)
-  static const String apiBaseUrl = 'https://www.buytogetherindia.com/api';
+  static const String apiBaseUrl = 'https://api.findyourtrek.com/api/';
   static const String fcmTokenUrl =
-      'https://www.buytogetherindia.com/api/fcm/register';
-//https://api.Mobasket.com/api/notification/user/token
+      'https://api.findyourtrek.com/api/v1/auth/fcm-token';
+  //https://api.Mobasket.com/api/notification/user/token
   // ==================== SPLASH SCREEN ====================
   static const int splashDurationSeconds = 2;
 
