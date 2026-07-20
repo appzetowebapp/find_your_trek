@@ -1,22 +1,21 @@
 {
   "project_info": {
-    "project_number": "694115785084",
-    "firebase_url": "https://but-together-default-rtdb.firebaseio.com",
-    "project_id": "but-together",
-    "storage_bucket": "but-together.firebasestorage.app"
+    "project_number": "1078055418808",
+    "project_id": "find-your-trek",
+    "storage_bucket": "find-your-trek.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:694115785084:android:ef949032f30607943eacf9",
+        "mobilesdk_app_id": "1:1078055418808:android:356f1d141534a2a2b2ad4d",
         "android_client_info": {
-          "package_name": "com.buytogether.app"
+          "package_name": "com.app.findyourtrek"
         }
       },
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyDVL0NhTf7P1_G0PyuOg5PhPQaEuVBvCKo"
+          "current_key": "AIzaSyB8ZQnIIcx1ZgZ3v_ncBGXPYSdzq44A2LM"
         }
       ],
       "services": {
